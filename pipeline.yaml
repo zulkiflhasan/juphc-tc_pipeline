@@ -1,0 +1,72 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: tax-calculator-pipeline
+spec:
+  description: Clone source, install npm dependencies, test with Jasmine, and build/push the image.
+  params:
+    - name: repo-url
+      type: string
+    - name: revision
+      type: string
+      default: main
+    - name: image
+      type: string
+  workspaces:
+    - name: shared-data
+    - name: dockerconfig
+      description: Docker config.json secret for IBM Container Registry authorization.
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.revision)
+      workspaces:
+        - name: output
+          workspace: shared-data
+    - name: install-dependencies
+      runAfter: [fetch-source]
+      taskRef:
+        name: npm
+      workspaces:
+        - name: source
+          workspace: shared-data
+    - name: run-jasmine-tests
+      runAfter: [install-dependencies]
+      taskRef:
+        name: jasmine
+      workspaces:
+        - name: source
+          workspace: shared-data
+    - name: build-image
+      runAfter: [run-jasmine-tests]
+      taskSpec:
+        params:
+          - name: image
+            type: string
+        workspaces:
+          - name: source
+          - name: dockerconfig
+        steps:
+          - name: kaniko-build-and-push
+            image: gcr.io/kaniko-project/executor:v1.23.2
+            args:
+              - --dockerfile=$(workspaces.source.path)/Dockerfile
+              - --context=$(workspaces.source.path)
+              - --destination=$(params.image)
+              - --skip-tls-verify=false
+            env:
+              - name: DOCKER_CONFIG
+                value: $(workspaces.dockerconfig.path)
+      params:
+        - name: image
+          value: $(params.image)
+      workspaces:
+        - name: source
+          workspace: shared-data
+        - name: dockerconfig
+          workspace: dockerconfig
